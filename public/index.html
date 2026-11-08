@@ -26,7 +26,10 @@
   button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:9px 15px; font-size:14px; cursor:pointer; }
   button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
   details { border:1px solid var(--line); border-radius:10px; padding:0 12px; margin-top:12px; }
-  details > summary { cursor:pointer; padding:11px 0; color:var(--mut); font-size:13px; list-style:none; }
+  details > summary { cursor:pointer; padding:11px 0; color:var(--accent); font-size:13px; font-weight:600; list-style:none; user-select:none; }
+  details > summary::-webkit-details-marker { display:none; }
+  details > summary::after { content:"  ▾"; color:var(--mut); }
+  details[open] > summary::after { content:"  ▴"; }
   details[open] > summary { border-bottom:1px solid var(--line); margin-bottom:8px; }
   label { display:block; color:var(--mut); font-size:12px; margin:10px 0 4px; }
   input { width:100%; padding:8px; border-radius:6px; border:1px solid var(--mut); background:var(--bg); color:var(--fg); }
@@ -51,7 +54,6 @@
 
   <div style="display:flex; gap:8px;">
     <button id="run">Run again</button>
-    <button class="ghost" id="toggle">Advanced</button>
   </div>
 
   <details id="adv">
@@ -203,7 +205,6 @@ async function run() {
   report(signals);
 }
 $('run').addEventListener('click', run);
-$('toggle').addEventListener('click', () => { $('adv').open = !$('adv').open; });
 run();  // auto-run on load
 </script>
 </body>
