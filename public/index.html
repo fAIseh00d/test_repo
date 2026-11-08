@@ -16,6 +16,7 @@
   .verdict { border-radius:12px; padding:16px; margin:0 0 14px; border:1px solid var(--line); background:var(--card); }
   .verdict.leak { background:color-mix(in srgb, var(--bad) 12%, var(--bg)); border-color:var(--bad); }
   .verdict.safe { background:color-mix(in srgb, var(--ok) 12%, var(--bg)); border-color:var(--ok); }
+  .verdict.unknown { background:color-mix(in srgb, var(--warn) 12%, var(--bg)); border-color:var(--warn); }
   .verdict .big { font-size:17px; font-weight:700; }
   .verdict .sub { color:var(--mut); font-size:13px; margin-top:4px; }
   .verdict .ip { font-family:ui-monospace,Menlo,monospace; }
@@ -26,7 +27,7 @@
   button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
   label { display:block; color:var(--mut); font-size:12px; margin:10px 0 4px; }
   input { width:100%; padding:8px; border-radius:6px; border:1px solid var(--mut); background:var(--bg); color:var(--fg); }
-  .adv { margin-top:14px; } .adv.hidden { display:none; }
+  .panel { margin-top:14px; } .panel[hidden] { display:none; }
   .card { background:var(--card); border-radius:10px; padding:10px 12px; margin:10px 0; }
   .card h2 { font-size:13px; margin:0 0 6px; }
   .row { display:flex; justify-content:space-between; gap:12px; padding:2px 0; }
@@ -51,7 +52,7 @@
     <button class="ghost" id="toggle" aria-expanded="false">Advanced ▾</button>
   </div>
 
-  <div class="adv hidden" id="adv">
+  <div class="panel" id="panel" hidden>
     <div class="card"><h2>Your VPN exit (what any site sees — this is normal)</h2><div id="egress"></div></div>
     <div class="card"><h2>Real-IP leak check — WebRTC (bad only if ≠ your exit)</h2><div id="webrtc"></div></div>
     <div class="card"><h2>Silo check — a domain you route DIRECT should show your real IP</h2>
@@ -87,15 +88,26 @@ async function getJson(url, ms = 7000) {
 }
 
 async function probeEgress() {
+  // Every source is independent: a blocked request (adblock, CORS, timeout) only turns
+  // into one "blocked" row. It must never throw, empty the card, or drop the exit.
   const out = [];
-  const one = async (l, u, pick) => { try { out.push([l, ...pick(await getJson(u))]); } catch { out.push([l,'(failed)','']); } };
+  const one = async (label, url, pick) => {
+    try {
+      const [ip, cc] = pick(await getJson(url)) || [];
+      if (!ip) throw new Error('no ip in response');
+      out.push({ label, ip, cc: cc || '', ok: true });
+    } catch { out.push({ label, ip: 'blocked / unavailable', cc: '', ok: false }); }
+  };
   await Promise.all([
     one('ipwho.is','https://ipwho.is/', d => [d.ip, d.country_code]),
     one('ipapi.co','https://ipapi.co/json/', d => [d.ip, d.country_code]),
     one('ipify','https://api.ipify.org?format=json', d => [d.ip, '']),
   ]);
-  for (const [,ip,cc] of out) { if (ip && ip !== '(failed)' && !exitIp) exitIp = ip; if (cc && !exitCountry) exitCountry = cc; }
-  rows($('egress'), [...out.map(([l,ip,cc]) => [l, `${ip}${cc?'  ('+cc+')':''}`]), ['your exit', `${exitIp||'—'}${exitCountry?'  ('+exitCountry+')':''}`, 'fine']]);
+  for (const r of out) { if (r.ok && !exitIp) exitIp = r.ip; if (r.ok && r.cc && !exitCountry) exitCountry = r.cc; }
+  rows($('egress'), [
+    ...out.map(r => [r.label, r.ok ? `${r.ip}${r.cc?'  ('+r.cc+')':''}` : r.ip, r.ok ? '' : 'warn']),
+    ['your exit', `${exitIp||'—'}${exitCountry?'  ('+exitCountry+')':''}`, exitIp ? 'fine' : 'warn'],
+  ]);
 }
 
 function probeWebRTC() {
@@ -113,9 +125,12 @@ function probeWebRTC() {
       try { pc.close(); } catch {}
       const list = [...ips];
       const priv = (x) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|127\.|::1|fe80|f[cd])/i.test(x);
-      realLeakIps = list.filter(x => !priv(x) && x !== exitIp); // public AND not the exit = REAL IP leaking
+      // Without a known exit we cannot tell a leak from the exit itself — report "unknown",
+      // never a false LEAK.
+      realLeakIps = exitIp ? list.filter(x => !priv(x) && x !== exitIp) : [];
       rows($('webrtc'), list.length ? list.map(x => {
         if (priv(x)) return ['local', x, 'fine'];
+        if (!exitIp) return ['public candidate (no exit IP to compare)', x, 'warn'];
         if (x === exitIp) return ['your exit (captured — fine)', x, 'fine'];
         return ['REAL IP LEAK', x, 'tell'];
       }) : [['result','no candidates — good (or WebView-blocked)', 'fine']]);
@@ -185,17 +200,20 @@ function paintVerdict() {
   const v = $('verdict');
   const realLeak = realLeakIps.length > 0;
   const siloBroken = siloState === 'broken';
+  const noExit = !exitIp;                       // every egress probe blocked/offline
   const bad = realLeak || siloBroken;
-  v.className = 'verdict ' + (bad ? 'leak' : 'safe');
+  v.className = 'verdict ' + (bad ? 'leak' : noExit ? 'unknown' : 'safe');
   $('vbig').textContent = realLeak ? '⚠ Your REAL IP is leaking around the tunnel'
     : siloBroken ? '⚠ A domain you route "direct" is being tunnelled'
+    : noExit ? '? Could not determine your exit IP'
     : '✓ Clean — no real-IP leak';
   $('vsub').innerHTML = realLeak ? `A non-exit IP escaped: <span class="ip">${realLeakIps.join(', ')}</span>. That reveals your real location around the VPN — fix WebRTC/DNS/IPv6.`
     : siloBroken ? `Your "direct" domain returned the exit <span class="ip">${exitIp||'—'}</span> instead of your real IP — RU services on it would see the VPN. Fix the whitelist.`
+    : noExit ? 'All egress probes were blocked (adblock, CORS or offline), so there is nothing to compare against. This is <b>not</b> a leak report — just no data. Unblock one source and run again.'
     : `Sites see your exit <span class="ip">${exitIp||'—'}</span> (${exitCountry||'—'}) — that's normal and expected. Nothing leaks your real IP.${siloState==='ok'?' Silo check passed.':''}`;
   $('vsum').innerHTML = [
-    [`exit ${exitCountry||'?'}`, 'info'],
-    [`real-IP ${realLeak?'LEAK':'ok'}`, realLeak?'bad':'ok'],
+    [`exit ${noExit?'unknown':(exitCountry||'?')}`, noExit?'bad':'info'],
+    [`real-IP ${realLeak?'LEAK':noExit?'unknown':'ok'}`, realLeak?'bad':(noExit?'info':'ok')],
     [`silo ${siloState}`, siloState==='broken'?'bad':(siloState==='ok'?'ok':'info')],
   ].map(([t,c]) => `<span class="chip ${c}">${t}</span>`).join('');
 }
@@ -204,14 +222,17 @@ async function run() {
   showCtx(); probeFp();
   exitIp = exitCountry = directIp = null; realLeakIps = []; siloState = 'unset'; tzMismatch = blockedReach = false;
   $('verdict').className = 'verdict'; $('vbig').textContent = 'Running checks…'; $('vsub').textContent=''; $('vsum').innerHTML='';
-  await probeEgress();
-  await loadConfig();
-  await Promise.all([probeWebRTC(), probeSilo(), probeBlocked()]);
-  probeTz(); probeFp(); paintVerdict(); report();
+  // A single failing/blocked probe must not abort the rest of the page.
+  await safe(probeEgress);
+  await safe(loadConfig);
+  await Promise.all([safe(probeWebRTC), safe(probeSilo), safe(probeBlocked)]);
+  await safe(probeTz); probeFp(); paintVerdict(); safe(report);
 }
+const safe = async (fn) => { try { await fn(); } catch (err) { console.warn('probe step failed:', err); } };
 $('run').addEventListener('click', run);
 $('toggle').addEventListener('click', () => {
-  const a = $('adv'); const open = a.classList.toggle('hidden') === false;
+  const el = $('panel'); const open = el.hasAttribute('hidden');
+  if (open) el.removeAttribute('hidden'); else el.setAttribute('hidden', '');
   $('toggle').textContent = open ? 'Advanced ▴' : 'Advanced ▾';
   $('toggle').setAttribute('aria-expanded', String(open));
 });
