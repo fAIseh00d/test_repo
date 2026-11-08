@@ -99,7 +99,14 @@ function probeWebRTC() {
     let pc; try { pc = new RTCPeerConnection({ iceServers:[{urls:'stun:stun.l.google.com:19302'}] }); }
     catch { rows(el, [['result','RTCPeerConnection unavailable (typical in a WebView)', 'fine']]); return resolve(); }
     const ips = new Set();
-    pc.onicecandidate = (e) => { if (!e.candidate) return; const m = /([0-9]{1,3}(\.[0-9]{1,3}){3})|([a-f0-9:]{6,})/i.exec(e.candidate.candidate||''); if (m && m[0]) ips.add(m[0]); };
+    pc.onicecandidate = (e) => {
+      // ICE candidate: "candidate:<foundation> <comp> <proto> <priority> <ADDRESS> <port> typ ...".
+      // The address is field [4] — NOT the priority (a long digit run my old regex wrongly matched).
+      if (!e.candidate || !e.candidate.candidate) return;
+      const addr = e.candidate.candidate.split(' ')[4];
+      // Skip Chrome's mDNS placeholders (x.local) — those are the privacy feature, not a leak.
+      if (addr && (addr.includes('.') || addr.includes(':')) && !addr.endsWith('.local')) ips.add(addr);
+    };
     pc.createDataChannel('x'); pc.createOffer().then(o => pc.setLocalDescription(o)).catch(()=>{});
     setTimeout(() => {
       try { pc.close(); } catch {}
