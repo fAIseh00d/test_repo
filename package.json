@@ -1,0 +1,5 @@
+{
+  "name": "leak-probe",
+  "private": true,
+  "devDependencies": { "wrangler": "^4" }
+}
