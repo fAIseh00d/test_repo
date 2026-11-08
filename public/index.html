@@ -53,11 +53,11 @@
   </div>
 
   <div class="panel" id="panel" hidden>
-    <div class="card"><h2>Your VPN exit (what any site sees — this is normal)</h2><div id="egress"></div></div>
-    <div class="card"><h2>Real-IP leak check — WebRTC (bad only if ≠ your exit)</h2><div id="webrtc"></div></div>
-    <div class="card"><h2>Silo check — a domain you route DIRECT should show your real IP</h2>
-      <label for="direct">Direct-routed domain (whitelisted in your VPN; must run the /ip Worker)</label>
-      <input id="direct" placeholder="e.g. probe-01.locussolus.net" value="">
+    <div class="card"><h2>Egress — the IP this domain's own requests come from</h2><div id="egress"></div></div>
+    <div class="card"><h2>Real-IP leak check — WebRTC (a public IP ≠ this egress)</h2><div id="webrtc"></div></div>
+    <div class="card"><h2>Two-domain cross-check — the companion (opposite-role) domain must resolve to a different IP</h2>
+      <label for="direct">Companion domain (auto-filled from /api/config; the opposite-role probe, must run the /ip Worker)</label>
+      <input id="direct" placeholder="e.g. probe-02.locussolus.net" value="">
       <div id="silo" style="margin-top:6px"></div>
     </div>
     <div class="card"><h2>Fingerprint tells (not leaks — just metadata)</h2><div id="tz"></div></div>
@@ -74,7 +74,16 @@
 const $ = (id) => document.getElementById(id);
 const rows = (el, p) => { el.innerHTML = p.map(([k,v,c]) => `<div class="row"><span class="k">${k}</span><span class="v ${c||''}">${v}</span></div>`).join(''); };
 const tg = window.Telegram && window.Telegram.WebApp;
-let inTelegram = false, exitIp = null, exitCountry = null, realLeakIps = [], siloState = 'unset', directIp = null, tzMismatch = false, blockedReach = false;
+let inTelegram = false, exitIp = null, exitCountry = null, realLeakIps = [], siloState = 'unset', directIp = null, directCountry = null, tzMismatch = false, blockedReach = false;
+// expected ∈ 'tunnel' | 'direct' | null — this domain's role, from /api/config (env EXPECTED_ROUTE).
+//   tunnel: egress SHOULD be the VPN exit (foreign).   direct: egress SHOULD be the real RU IP.
+//   null:   role not configured -> informational verdict only.
+let expected = null, verdictLevel = 'unknown';
+// Local-only test hooks: ?mockExpected=&mockExit=&mockExitCc=&mockDirect=&mockDirectCc=&mockLeak=
+// are honoured ONLY on file:// / localhost (never on the deployed https origin) so the verdict
+// logic can be exercised with synthetic egress values. No effect in production.
+const MOCK_OK = location.protocol === 'file:' || ['localhost', '127.0.0.1'].includes(location.hostname);
+// TODO (deferred, needs control `whoami`): egress ≠ assigned-slot check; exit-IP reputation/blocklist check.
 
 function showCtx() {
   try { if (tg) tg.ready(); } catch {}
@@ -140,24 +149,49 @@ function probeWebRTC() {
 }
 
 async function loadConfig() {
-  // Pull the companion (whitelisted/direct) domain from the Worker — it's not in this page's HTML.
-  try { const c = await getJson('/api/config', 4000); if (c && c.companion && !$('direct').value) $('direct').value = c.companion; } catch {}
+  // Pull this domain's role (expected) + the companion (opposite-role) domain from the Worker —
+  // neither is in this page's HTML.
+  try {
+    const c = await getJson('/api/config', 4000);
+    if (c) {
+      if (c.companion && !$('direct').value) $('direct').value = c.companion;
+      expected = (c.expected === 'tunnel' || c.expected === 'direct') ? c.expected : null;
+    }
+  } catch {}
+}
+
+function applyMocks() {
+  if (!MOCK_OK) return;
+  const q = new URLSearchParams(location.search);
+  if (q.has('mockExpected')) { const e = q.get('mockExpected'); expected = (e === 'tunnel' || e === 'direct') ? e : null; }
+  if (q.has('mockExit')) exitIp = q.get('mockExit') || null;
+  if (q.has('mockExitCc')) exitCountry = q.get('mockExitCc') || null;
+  if (q.has('mockDirect')) directIp = q.get('mockDirect') || null;
+  if (q.has('mockDirectCc')) directCountry = q.get('mockDirectCc') || null;
+  if (q.has('mockLeak')) realLeakIps = (q.get('mockLeak') || '').split(',').map(s => s.trim()).filter(Boolean);
 }
 
 async function probeSilo() {
   const d = ($('direct').value||'').trim().replace(/^https?:\/\//,'').replace(/\/.*$/,'');
-  if (!d) { siloState = 'unset'; rows($('silo'), [['status','set a direct-routed domain to test the silo', 'warn']]); return; }
+  if (!d) { siloState = 'unset'; directIp = null; directCountry = null; rows($('silo'), [['status','set the companion domain to cross-check the silo', 'warn']]); return; }
   try {
     const r = await getJson(`https://${d}/ip`, 7000);
-    directIp = r.ip || null;
+    directIp = r.ip || null; directCountry = r.country || null;
+    // The two domains play OPPOSITE roles (tunnel vs direct). They must resolve to DIFFERENT IPs:
+    // the tunnel side -> the exit, the direct side -> the real RU IP. Equal => routing isn't
+    // discriminating (silo broken, or the VPN is off), regardless of which role this page is.
     const same = directIp && exitIp && directIp === exitIp;
     siloState = directIp ? (same ? 'broken' : 'ok') : 'unreachable';
+    const thisRole = expected === 'direct' ? 'this domain · DIRECT (should be real RU)'
+      : expected === 'tunnel' ? 'this domain · TUNNEL (should be the exit)' : 'this domain';
+    const compRole = expected === 'direct' ? 'tunnel companion (should be the exit)'
+      : expected === 'tunnel' ? 'direct companion (should be real RU)' : 'companion';
     rows($('silo'), [
-      ['this domain (tunnelled) sees', `${exitIp||'—'}${exitCountry?' ('+exitCountry+')':''}`],
-      [`${d} (should be DIRECT) sees`, `${directIp||'—'}${r.country?' ('+r.country+')':''}`, same?'tell':'fine'],
-      ['verdict', same ? 'SAME as exit — this domain is tunnelled, NOT direct (silo broken)' : 'different — routed direct, your real IP (silo OK)', same?'tell':'fine'],
+      [`${thisRole} sees`, `${exitIp||'—'}${exitCountry?' ('+exitCountry+')':''}`],
+      [`${compRole} — ${d} — sees`, `${directIp||'—'}${directCountry?' ('+directCountry+')':''}`, same?'tell':'fine'],
+      ['cross-check', same ? 'SAME IP on both domains — routing not discriminating (silo broken / VPN off)' : 'different IPs — the two domains route differently (silo OK)', same?'tell':'fine'],
     ]);
-  } catch { siloState = 'unreachable'; rows($('silo'), [['status', `could not reach ${d}/ip (needs the /ip Worker)`, 'warn']]); }
+  } catch { siloState = 'unreachable'; directIp = null; directCountry = null; rows($('silo'), [['status', `could not reach ${d}/ip (needs the /ip Worker)`, 'warn']]); }
 }
 
 function probeBlocked() {
@@ -190,43 +224,96 @@ function probeFp() {
 
 async function report() {
   const payload = { ts:Date.now(), context: inTelegram?'telegram-webview':'browser', tgInitData: tg&&tg.initData?tg.initData:null,
-    exitIp, exitCountry, realLeak: realLeakIps.length>0, siloState, tzMismatch, blockedReach };
+    expected, verdict: verdictLevel, exitIp, exitCountry, directIp, directCountry, realLeak: realLeakIps.length>0, siloState, tzMismatch, blockedReach };
   try { const r = await fetch('/api/report', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(payload) });
     const j = await r.json().catch(()=>({})); rows($('rep'), [['/api/report', r.ok?(j.ok?'delivered':'accepted'):`http ${r.status}`, r.ok?'fine':'warn']]);
   } catch { rows($('rep'), [['/api/report','no reporter on this host (static fallback)','warn']]); }
 }
 
+// ── Role-aware verdict (pure; no DOM) ────────────────────────────────────────
+// The old verdict was role-BLIND: it treated "a site sees your exit" as always fine. That is
+// only correct for a TUNNEL domain. For a DIRECT (whitelisted) domain, the egress SHOULD be the
+// real RU IP, and showing the exit there means the silo is broken and the exit is burned.
+// Inputs are plain values so this can be unit-tested off-DOM.
+//   selfIp/selfCc — egress as THIS domain's own requests are seen (the role under test).
+//   compIp/compCc — the companion (opposite-role) domain's /ip (cross-check).
+//   realLeakIps   — WebRTC/DNS/IPv6 PUBLIC IPs that are ≠ selfIp (non-egress real-IP leak).
+// Returns { level:'leak'|'safe'|'unknown', title, sub (HTML), chips:[[text,cls]] }.
+function decideVerdict({ expected, selfIp, selfCc, compIp, compCc, realLeakIps }) {
+  const leaks = realLeakIps || [];
+  const realLeak = leaks.length > 0;
+  const noExit = !selfIp;
+  const haveBoth = !!(selfIp && compIp);
+  const sameAcross = haveBoth && selfIp === compIp;   // two opposite-role domains agree => not discriminating
+  const selfIsRu = selfCc === 'RU';
+  const selfForeign = !!selfCc && selfCc !== 'RU';
+  const ipStr = (ip, cc) => `${ip || '—'}${cc ? ' (' + cc + ')' : ''}`;
+  const crossChip = () => !haveBoth ? ['cross-check n/a', 'info'] : sameAcross ? ['cross-check SAME', 'bad'] : ['cross-check differ', 'ok'];
+
+  if (expected === 'tunnel') {
+    if (noExit) return { level:'unknown', title:'? Could not determine your exit IP',
+      sub:'This domain should route through the VPN, but every egress probe was blocked (adblock, CORS or offline). No data to judge — <b>not</b> a leak report. Unblock one source and run again.',
+      chips:[['role: tunnel','info'],['exit unknown','bad'],['real-IP unknown','info'],crossChip()] };
+    const reds = [];
+    if (selfIsRu) reds.push(`This page is served on the <b>tunnel</b> domain, but egress is your real RU IP <span class="ip">${ipStr(selfIp,selfCc)}</span> — the tunnel is OFF or not routing it.`);
+    if (realLeak) reds.push(`Real-IP leak: a public IP that isn't the exit escaped — <span class="ip">${leaks.join(', ')}</span> (WebRTC/DNS/IPv6).`);
+    if (sameAcross) reds.push(`The tunnel domain and the direct domain both return <span class="ip">${ipStr(selfIp,selfCc)}</span> — routing isn't discriminating (silo broken or VPN off).`);
+    if (reds.length) return { level:'leak', title:'⚠ Tunnel role failing — your real IP or identity is exposed',
+      sub:reds.join('<br>'),
+      chips:[['role: tunnel','info'],[`exit ${selfCc||'?'}`, selfIsRu?'bad':'ok'],[`real-IP ${realLeak?'LEAK':'ok'}`, realLeak?'bad':'ok'],crossChip()] };
+    return { level:'safe', title:'✓ Tunnel OK — sites see your exit, nothing else leaks',
+      sub:`Egress is your VPN exit <span class="ip">${ipStr(selfIp,selfCc)}</span> (expected on a tunnelled domain) and no non-exit public IP leaks${haveBoth?`; the direct companion correctly shows a different IP <span class="ip">${ipStr(compIp,compCc)}</span>`:''}.`,
+      chips:[['role: tunnel','info'],[`exit ${selfCc||'?'}`,'ok'],['real-IP ok','ok'],crossChip()] };
+  }
+
+  if (expected === 'direct') {
+    if (noExit) return { level:'unknown', title:'? Could not determine your egress IP',
+      sub:'This domain should route <b>DIRECT</b> (your real RU IP), but every egress probe was blocked. No data to judge — <b>not</b> a leak report. Unblock one source and run again.',
+      chips:[['role: direct','info'],['egress unknown','bad'],crossChip()] };
+    // Egress should be the real RU IP. It is the EXIT if it is foreign, or equals the tunnel companion.
+    const reds = [];
+    if (selfForeign) reds.push(`This page is served on a <b>direct</b> (whitelisted) domain, but egress is a foreign IP <span class="ip">${ipStr(selfIp,selfCc)}</span> — it is riding the VPN exit, not your real RU IP. The whitelist/bypass failed, so a service here now sees the exit (silo broken, exit burned).`);
+    if (sameAcross) reds.push(`The direct domain and the tunnel domain both return <span class="ip">${ipStr(selfIp,selfCc)}</span> — this "direct" domain is being tunnelled, exposing the exit (silo broken).`);
+    if (reds.length) return { level:'leak', title:'⚠ Direct role failing — the VPN exit is exposed on a direct domain',
+      sub:reds.join('<br>'),
+      chips:[['role: direct','info'],[`egress ${selfCc||'?'}`,'bad'],crossChip()] };
+    return { level:'safe', title:'✓ Direct OK — this domain sees your real IP, not the exit',
+      sub:`Egress is your real IP <span class="ip">${ipStr(selfIp,selfCc)}</span> (expected on a direct domain), so services here never see the VPN exit${haveBoth?`; the tunnel companion correctly shows a different IP <span class="ip">${ipStr(compIp,compCc)}</span>`:''}. WebRTC showing your real IP here is expected, not a leak.`,
+      chips:[['role: direct','info'],[`egress ${selfCc||'?'}`,'ok'],crossChip()] };
+  }
+
+  // expected === null — role not configured: informational only, flag only a clear real-IP leak.
+  if (noExit) return { level:'unknown', title:'? Could not determine your egress IP',
+    sub:'Every egress probe was blocked (adblock, CORS or offline). Role not configured, so this is informational only — <b>not</b> a leak report.',
+    chips:[['role: unset','info'],['egress unknown','info']] };
+  if (realLeak) return { level:'leak', title:'⚠ Real-IP leak detected',
+    sub:`A public IP that isn't your egress escaped — <span class="ip">${leaks.join(', ')}</span> (WebRTC/DNS/IPv6). Role not configured, so routing can't be judged, but a non-egress public IP is a clear real-IP leak.`,
+    chips:[['role: unset','info'],[`egress ${selfCc||'?'}`,'info'],['real-IP LEAK','bad']] };
+  return { level:'unknown', title:'ℹ Egress captured — role not configured',
+    sub:`This domain sees <span class="ip">${ipStr(selfIp,selfCc)}</span>. Without an expected route (tunnel/direct) from /api/config, the verdict is informational: no non-egress real-IP leak was seen, but whether this egress is correct can't be judged. Set EXPECTED_ROUTE on the Worker.`,
+    chips:[['role: unset','info'],[`egress ${selfCc||'?'}`,'info'],['real-IP ok','info']] };
+}
+
 function paintVerdict() {
-  const v = $('verdict');
-  const realLeak = realLeakIps.length > 0;
-  const siloBroken = siloState === 'broken';
-  const noExit = !exitIp;                       // every egress probe blocked/offline
-  const bad = realLeak || siloBroken;
-  v.className = 'verdict ' + (bad ? 'leak' : noExit ? 'unknown' : 'safe');
-  $('vbig').textContent = realLeak ? '⚠ Your REAL IP is leaking around the tunnel'
-    : siloBroken ? '⚠ A domain you route "direct" is being tunnelled'
-    : noExit ? '? Could not determine your exit IP'
-    : '✓ Clean — no real-IP leak';
-  $('vsub').innerHTML = realLeak ? `A non-exit IP escaped: <span class="ip">${realLeakIps.join(', ')}</span>. That reveals your real location around the VPN — fix WebRTC/DNS/IPv6.`
-    : siloBroken ? `Your "direct" domain returned the exit <span class="ip">${exitIp||'—'}</span> instead of your real IP — RU services on it would see the VPN. Fix the whitelist.`
-    : noExit ? 'All egress probes were blocked (adblock, CORS or offline), so there is nothing to compare against. This is <b>not</b> a leak report — just no data. Unblock one source and run again.'
-    : `Sites see your exit <span class="ip">${exitIp||'—'}</span> (${exitCountry||'—'}) — that's normal and expected. Nothing leaks your real IP.${siloState==='ok'?' Silo check passed.':''}`;
-  $('vsum').innerHTML = [
-    [`exit ${noExit?'unknown':(exitCountry||'?')}`, noExit?'bad':'info'],
-    [`real-IP ${realLeak?'LEAK':noExit?'unknown':'ok'}`, realLeak?'bad':(noExit?'info':'ok')],
-    [`silo ${siloState}`, siloState==='broken'?'bad':(siloState==='ok'?'ok':'info')],
-  ].map(([t,c]) => `<span class="chip ${c}">${t}</span>`).join('');
+  const r = decideVerdict({ expected, selfIp: exitIp, selfCc: exitCountry, compIp: directIp, compCc: directCountry, realLeakIps });
+  verdictLevel = r.level;
+  $('verdict').className = 'verdict ' + (r.level === 'leak' ? 'leak' : r.level === 'safe' ? 'safe' : 'unknown');
+  $('vbig').textContent = r.title;
+  $('vsub').innerHTML = r.sub;
+  $('vsum').innerHTML = r.chips.map(([t,c]) => `<span class="chip ${c}">${t}</span>`).join('');
 }
 
 async function run() {
   showCtx(); probeFp();
-  exitIp = exitCountry = directIp = null; realLeakIps = []; siloState = 'unset'; tzMismatch = blockedReach = false;
+  exitIp = exitCountry = directIp = directCountry = null; realLeakIps = []; siloState = 'unset'; expected = null; tzMismatch = blockedReach = false;
   $('verdict').className = 'verdict'; $('vbig').textContent = 'Running checks…'; $('vsub').textContent=''; $('vsum').innerHTML='';
   // A single failing/blocked probe must not abort the rest of the page.
   await safe(probeEgress);
   await safe(loadConfig);
   await Promise.all([safe(probeWebRTC), safe(probeSilo), safe(probeBlocked)]);
-  await safe(probeTz); probeFp(); paintVerdict(); safe(report);
+  await safe(probeTz); probeFp();
+  applyMocks();          // local-only override of egress/role for verdict-logic testing (no-op in prod)
+  paintVerdict(); safe(report);
 }
 const safe = async (fn) => { try { await fn(); } catch (err) { console.warn('probe step failed:', err); } };
 $('run').addEventListener('click', run);

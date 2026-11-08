@@ -12,10 +12,16 @@ export default {
     if (url.pathname === "/ip") {
       return cors(json({ ip: request.headers.get("cf-connecting-ip"), country: (request.cf && request.cf.country) || null }));
     }
-    // Config for the page: the companion (silo-compare) domain comes from env, not the public
-    // HTML. `wrangler secret put COMPANION_DOMAIN` on the TUNNELLED probe = the WHITELISTED one.
+    // Config for the page: the companion (silo-compare) domain and this domain's EXPECTED route
+    // come from env, not the public HTML. Per deployment:
+    //   `wrangler secret put EXPECTED_ROUTE`  -> "tunnel" (egress SHOULD be the VPN exit) on the
+    //                                            tunnelled probe, or "direct" (egress SHOULD be the
+    //                                            real RU IP) on the whitelisted/direct probe.
+    //   `wrangler secret put COMPANION_DOMAIN` -> the OTHER probe (opposite role) for the cross-check.
+    // expected defaults to null (role not configured -> informational verdict only).
     if (url.pathname === "/api/config") {
-      return cors(json({ companion: env.COMPANION_DOMAIN || null, reporter: !!env.CONTROL_URL }));
+      const expected = env.EXPECTED_ROUTE === "tunnel" || env.EXPECTED_ROUTE === "direct" ? env.EXPECTED_ROUTE : null;
+      return cors(json({ companion: env.COMPANION_DOMAIN || null, reporter: !!env.CONTROL_URL, expected }));
     }
     if (url.pathname === "/api/report") {
       if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
