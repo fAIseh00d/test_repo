@@ -124,6 +124,11 @@ function probeWebRTC() {
   });
 }
 
+async function loadConfig() {
+  // Pull the companion (whitelisted/direct) domain from the Worker — it's not in this page's HTML.
+  try { const c = await getJson('/api/config', 4000); if (c && c.companion && !$('direct').value) $('direct').value = c.companion; } catch {}
+}
+
 async function probeSilo() {
   const d = ($('direct').value||'').trim().replace(/^https?:\/\//,'').replace(/\/.*$/,'');
   if (!d) { siloState = 'unset'; rows($('silo'), [['status','set a direct-routed domain to test the silo', 'warn']]); return; }
@@ -200,6 +205,7 @@ async function run() {
   exitIp = exitCountry = directIp = null; realLeakIps = []; siloState = 'unset'; tzMismatch = blockedReach = false;
   $('verdict').className = 'verdict'; $('vbig').textContent = 'Running checks…'; $('vsub').textContent=''; $('vsum').innerHTML='';
   await probeEgress();
+  await loadConfig();
   await Promise.all([probeWebRTC(), probeSilo(), probeBlocked()]);
   probeTz(); probeFp(); paintVerdict(); report();
 }

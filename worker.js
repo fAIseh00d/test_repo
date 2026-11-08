@@ -12,6 +12,11 @@ export default {
     if (url.pathname === "/ip") {
       return cors(json({ ip: request.headers.get("cf-connecting-ip"), country: (request.cf && request.cf.country) || null }));
     }
+    // Config for the page: the companion (silo-compare) domain comes from env, not the public
+    // HTML. `wrangler secret put COMPANION_DOMAIN` on the TUNNELLED probe = the WHITELISTED one.
+    if (url.pathname === "/api/config") {
+      return cors(json({ companion: env.COMPANION_DOMAIN || null, reporter: !!env.CONTROL_URL }));
+    }
     if (url.pathname === "/api/report") {
       if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
       if (request.method !== "POST") return cors(json({ ok: false, error: "POST only" }, 405));
