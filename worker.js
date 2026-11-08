@@ -6,6 +6,12 @@
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    // Echo the caller's IP as THIS domain sees it. Used for the silo test: fetch /ip from a
+    // tunneled domain (should be the exit) and from a whitelisted/direct domain (should be the
+    // real RU IP). We don't log it — it's returned to the caller only.
+    if (url.pathname === "/ip") {
+      return cors(json({ ip: request.headers.get("cf-connecting-ip"), country: (request.cf && request.cf.country) || null }));
+    }
     if (url.pathname === "/api/report") {
       if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
       if (request.method !== "POST") return cors(json({ ok: false, error: "POST only" }, 405));

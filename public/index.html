@@ -13,8 +13,7 @@
   main { max-width:620px; margin:0 auto; }
   h1 { font-size:17px; margin:0 0 2px; }
   .ctx { color:var(--mut); margin:0 0 14px; font-size:12px; }
-  .verdict { border-radius:12px; padding:16px; margin:0 0 14px; border:1px solid var(--line); }
-  .verdict.run { background:var(--card); }
+  .verdict { border-radius:12px; padding:16px; margin:0 0 14px; border:1px solid var(--line); background:var(--card); }
   .verdict.leak { background:color-mix(in srgb, var(--bad) 12%, var(--bg)); border-color:var(--bad); }
   .verdict.safe { background:color-mix(in srgb, var(--ok) 12%, var(--bg)); border-color:var(--ok); }
   .verdict .big { font-size:17px; font-weight:700; }
@@ -22,17 +21,12 @@
   .verdict .ip { font-family:ui-monospace,Menlo,monospace; }
   .sum { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 0; }
   .chip { font-size:12px; padding:4px 9px; border-radius:999px; border:1px solid var(--line); background:var(--bg); }
-  .chip.bad { color:var(--bad); border-color:var(--bad); } .chip.ok { color:var(--ok); border-color:var(--ok); }
+  .chip.bad { color:var(--bad); border-color:var(--bad); } .chip.ok { color:var(--ok); border-color:var(--ok); } .chip.info { color:var(--mut); }
   button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:9px 15px; font-size:14px; cursor:pointer; }
   button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
-  details { border:1px solid var(--line); border-radius:10px; padding:0 12px; margin-top:12px; }
-  details > summary { cursor:pointer; padding:11px 0; color:var(--accent); font-size:13px; font-weight:600; list-style:none; user-select:none; }
-  details > summary::-webkit-details-marker { display:none; }
-  details > summary::after { content:"  ▾"; color:var(--mut); }
-  details[open] > summary::after { content:"  ▴"; }
-  details[open] > summary { border-bottom:1px solid var(--line); margin-bottom:8px; }
   label { display:block; color:var(--mut); font-size:12px; margin:10px 0 4px; }
   input { width:100%; padding:8px; border-radius:6px; border:1px solid var(--mut); background:var(--bg); color:var(--fg); }
+  .adv { margin-top:14px; } .adv.hidden { display:none; }
   .card { background:var(--card); border-radius:10px; padding:10px 12px; margin:10px 0; }
   .card h2 { font-size:13px; margin:0 0 6px; }
   .row { display:flex; justify-content:space-between; gap:12px; padding:2px 0; }
@@ -46,7 +40,7 @@
   <h1>Connection check</h1>
   <p class="ctx" id="ctx">checking…</p>
 
-  <div class="verdict run" id="verdict">
+  <div class="verdict" id="verdict">
     <div class="big" id="vbig">Running checks…</div>
     <div class="sub" id="vsub"></div>
     <div class="sum" id="vsum"></div>
@@ -54,33 +48,38 @@
 
   <div style="display:flex; gap:8px;">
     <button id="run">Run again</button>
+    <button class="ghost" id="toggle" aria-expanded="false">Advanced ▾</button>
   </div>
 
-  <details id="adv">
-    <summary>Advanced — raw results &amp; options</summary>
-    <label for="blocked">Blocked-in-RU domain for the reachability probe</label>
-    <input id="blocked" value="instagram.com">
-    <div class="card"><h2>1 · Egress — foreign-domain probes (what a site learns)</h2><div id="egress"></div></div>
-    <div class="card"><h2>2 · WebRTC leak (STUN srflx = your exit IP)</h2><div id="webrtc"></div></div>
-    <div class="card"><h2>3 · Blocked-domain reachability (reachable ⇒ tunnel)</h2><div id="blockedres"></div></div>
-    <div class="card"><h2>4 · Timezone / locale vs exit country</h2><div id="tz"></div></div>
-    <div class="card"><h2>5 · Context &amp; fingerprint</h2><pre id="fp"></pre></div>
-    <div class="card"><h2>6 · Report to control</h2><div id="rep"></div></div>
-  </details>
+  <div class="adv hidden" id="adv">
+    <div class="card"><h2>Your VPN exit (what any site sees — this is normal)</h2><div id="egress"></div></div>
+    <div class="card"><h2>Real-IP leak check — WebRTC (bad only if ≠ your exit)</h2><div id="webrtc"></div></div>
+    <div class="card"><h2>Silo check — a domain you route DIRECT should show your real IP</h2>
+      <label for="direct">Direct-routed domain (whitelisted in your VPN; must run the /ip Worker)</label>
+      <input id="direct" placeholder="e.g. probe-01.locussolus.net" value="">
+      <div id="silo" style="margin-top:6px"></div>
+    </div>
+    <div class="card"><h2>Fingerprint tells (not leaks — just metadata)</h2><div id="tz"></div></div>
+    <div class="card"><h2>Blocked-domain reachability (confirms the tunnel)</h2>
+      <label for="blocked">Blocked-in-RU domain</label><input id="blocked" value="instagram.com">
+      <div id="blockedres" style="margin-top:6px"></div>
+    </div>
+    <div class="card"><h2>Context &amp; fingerprint</h2><pre id="fp"></pre></div>
+    <div class="card"><h2>Report to control</h2><div id="rep"></div></div>
+  </div>
 </main>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const rows = (el, p) => { el.innerHTML = p.map(([k,v,c]) => `<div class="row"><span class="k">${k}</span><span class="v ${c||''}">${v}</span></div>`).join(''); };
 const tg = window.Telegram && window.Telegram.WebApp;
-let inTelegram = false, egressCountry = null, egressIp = null, webrtcLeak = false, blockedReach = false, tzMismatch = false;
+let inTelegram = false, exitIp = null, exitCountry = null, realLeakIps = [], siloState = 'unset', directIp = null, tzMismatch = false, blockedReach = false;
 
 function showCtx() {
   try { if (tg) tg.ready(); } catch {}
   inTelegram = !!(tg && tg.platform && tg.platform !== 'unknown');
   $('ctx').textContent = `Context: ${inTelegram ? `Telegram WebView (${tg.platform})` : 'browser'}`;
 }
-
 async function getJson(url, ms = 7000) {
   const c = new AbortController(); const t = setTimeout(() => c.abort(), ms);
   try { const r = await fetch(url, { signal:c.signal, cache:'no-store' }); return await r.json(); }
@@ -89,52 +88,67 @@ async function getJson(url, ms = 7000) {
 
 async function probeEgress() {
   const out = [];
-  const one = async (label, url, pick) => { try { const d = await getJson(url); out.push([label, ...pick(d)]); } catch { out.push([label, '(failed)', '', false]); } };
+  const one = async (l, u, pick) => { try { out.push([l, ...pick(await getJson(u))]); } catch { out.push([l,'(failed)','']); } };
   await Promise.all([
-    one('ipwho.is', 'https://ipwho.is/', d => [d.ip, d.country_code, d.country_code && d.country_code !== 'RU']),
-    one('ipapi.co', 'https://ipapi.co/json/', d => [d.ip, d.country_code, d.country_code && d.country_code !== 'RU']),
-    one('ipify', 'https://api.ipify.org?format=json', d => [d.ip, '', false]),
+    one('ipwho.is','https://ipwho.is/', d => [d.ip, d.country_code]),
+    one('ipapi.co','https://ipapi.co/json/', d => [d.ip, d.country_code]),
+    one('ipify','https://api.ipify.org?format=json', d => [d.ip, '']),
   ]);
-  for (const [,ip,cc] of out) { if (ip && ip !== '(failed)' && !egressIp) egressIp = ip; if (cc && !egressCountry) egressCountry = cc; }
-  rows($('egress'), [
-    ...out.map(([l, ip, cc, bad]) => [l, `${ip}${cc ? '  ('+cc+')' : ''}`, bad ? 'tell' : '']),
-    ['what a site sees', egressIp || '—', 'tell'],
-  ]);
+  for (const [,ip,cc] of out) { if (ip && ip !== '(failed)' && !exitIp) exitIp = ip; if (cc && !exitCountry) exitCountry = cc; }
+  rows($('egress'), [...out.map(([l,ip,cc]) => [l, `${ip}${cc?'  ('+cc+')':''}`]), ['your exit', `${exitIp||'—'}${exitCountry?'  ('+exitCountry+')':''}`, 'fine']]);
 }
 
 function probeWebRTC() {
   return new Promise((resolve) => {
     let pc; try { pc = new RTCPeerConnection({ iceServers:[{urls:'stun:stun.l.google.com:19302'}] }); }
-    catch { rows($('webrtc'), [['result','RTCPeerConnection unavailable (typical in a WebView)', 'fine']]); return resolve(); }
+    catch { rows($('webrtc'), [['result','RTCPeerConnection unavailable', 'fine']]); return resolve(); }
     const ips = new Set();
     pc.onicecandidate = (e) => {
       if (!e.candidate || !e.candidate.candidate) return;
-      const addr = e.candidate.candidate.split(' ')[4];
-      if (addr && (addr.includes('.') || addr.includes(':')) && !addr.endsWith('.local')) ips.add(addr);
+      const a = e.candidate.candidate.split(' ')[4];
+      if (a && (a.includes('.') || a.includes(':')) && !a.endsWith('.local')) ips.add(a);
     };
     pc.createDataChannel('x'); pc.createOffer().then(o => pc.setLocalDescription(o)).catch(()=>{});
     setTimeout(() => {
       try { pc.close(); } catch {}
       const list = [...ips];
-      const pub = list.filter(x => !/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|127\.|::1|fe80|f[cd])/i.test(x));
-      webrtcLeak = pub.length > 0;
-      rows($('webrtc'), list.length ? list.map(x => [pub.includes(x) ? 'PUBLIC (leak!)' : 'local', x, pub.includes(x) ? 'tell' : 'fine'])
-                                    : [['result','no public candidate exposed — good (or WebView-blocked)', 'fine']]);
+      const priv = (x) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|127\.|::1|fe80|f[cd])/i.test(x);
+      realLeakIps = list.filter(x => !priv(x) && x !== exitIp); // public AND not the exit = REAL IP leaking
+      rows($('webrtc'), list.length ? list.map(x => {
+        if (priv(x)) return ['local', x, 'fine'];
+        if (x === exitIp) return ['your exit (captured — fine)', x, 'fine'];
+        return ['REAL IP LEAK', x, 'tell'];
+      }) : [['result','no candidates — good (or WebView-blocked)', 'fine']]);
       resolve();
     }, 2500);
   });
 }
 
+async function probeSilo() {
+  const d = ($('direct').value||'').trim().replace(/^https?:\/\//,'').replace(/\/.*$/,'');
+  if (!d) { siloState = 'unset'; rows($('silo'), [['status','set a direct-routed domain to test the silo', 'warn']]); return; }
+  try {
+    const r = await getJson(`https://${d}/ip`, 7000);
+    directIp = r.ip || null;
+    const same = directIp && exitIp && directIp === exitIp;
+    siloState = directIp ? (same ? 'broken' : 'ok') : 'unreachable';
+    rows($('silo'), [
+      ['this domain (tunnelled) sees', `${exitIp||'—'}${exitCountry?' ('+exitCountry+')':''}`],
+      [`${d} (should be DIRECT) sees`, `${directIp||'—'}${r.country?' ('+r.country+')':''}`, same?'tell':'fine'],
+      ['verdict', same ? 'SAME as exit — this domain is tunnelled, NOT direct (silo broken)' : 'different — routed direct, your real IP (silo OK)', same?'tell':'fine'],
+    ]);
+  } catch { siloState = 'unreachable'; rows($('silo'), [['status', `could not reach ${d}/ip (needs the /ip Worker)`, 'warn']]); }
+}
+
 function probeBlocked() {
   return new Promise((resolve) => {
     const host = ($('blocked').value||'').trim().replace(/^https?:\/\//,'').replace(/\/.*$/,'');
-    if (!host) { rows($('blockedres'), [['status','no domain']]); return resolve(); }
-    const img = new Image(); const t0 = performance.now(); let done = false;
-    const fin = (reach, label) => { if (done) return; done = true; blockedReach = reach;
-      rows($('blockedres'), [['target',host],['result',label, reach?'tell':'fine'],['ms',String(Math.round(performance.now()-t0))],
-        ['meaning', reach ? 'reached ⇒ you are tunnelled (VPN tell)' : 'blocked/failed ⇒ looks like a normal RU user', reach?'tell':'fine']]); resolve(); };
-    img.onload = () => fin(true,'loaded'); img.onerror = () => fin(true,'responded (reached host)');
-    setTimeout(() => fin(false,'timed out (unreachable)'), 6000);
+    if (!host) return resolve();
+    const img = new Image(); let done = false;
+    const fin = (reach) => { if (done) return; done = true; blockedReach = reach;
+      rows($('blockedres'), [['target',host],['reachable', reach?'yes — tunnel is up':'no', ''],]); resolve(); };
+    img.onload = () => fin(true); img.onerror = () => fin(true);
+    setTimeout(() => fin(false), 6000);
     img.src = `https://${host}/favicon.ico?cb=${Date.now()}`;
   });
 }
@@ -143,69 +157,59 @@ function probeTz() {
   const tzone = Intl.DateTimeFormat().resolvedOptions().timeZone || '—';
   const langs = (navigator.languages||[navigator.language]).join(', ');
   const ru = /ru/i.test(langs) || /moscow|yekaterinburg|novosibirsk|samara|kaliningrad|omsk|krasnoyarsk/i.test(tzone);
-  tzMismatch = ru && egressCountry && egressCountry !== 'RU';
-  rows($('tz'), [['timezone',tzone],['languages',langs],['exit country',egressCountry||'—'],
-    ['mismatch', tzMismatch?'RU locale + non-RU exit — a tell':'consistent', tzMismatch?'tell':'fine']]);
+  tzMismatch = ru && exitCountry && exitCountry !== 'RU';
+  rows($('tz'), [['timezone',tzone],['languages',langs],['exit country',exitCountry||'—'],
+    ['locale vs exit', tzMismatch?'RU locale + non-RU exit (a VPN tell, not a leak)':'consistent', '']]);
 }
 
 function probeFp() {
   const n = navigator;
-  $('fp').textContent = JSON.stringify({
-    context: inTelegram ? 'telegram-webview' : 'browser', tgPlatform: tg ? tg.platform : null,
-    userAgent: n.userAgent, languages: n.languages, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    screen: `${screen.width}x${screen.height}@${devicePixelRatio}`,
-  }, null, 2);
+  $('fp').textContent = JSON.stringify({ context: inTelegram?'telegram-webview':'browser', tgPlatform: tg?tg.platform:null,
+    userAgent:n.userAgent, languages:n.languages, timezone:Intl.DateTimeFormat().resolvedOptions().timeZone, screen:`${screen.width}x${screen.height}@${devicePixelRatio}` }, null, 2);
 }
 
-// Best-effort report to our OWN origin. The control endpoint lives only in the Worker's
-// secret env (CONTROL_URL) — never in this public page. Static hosts without the Worker
-// (GitHub Pages) just get a 404 here and we skip silently.
-async function report(signals) {
-  const payload = {
-    ts: Date.now(), context: inTelegram ? 'telegram-webview' : 'browser',
-    tgPlatform: tg ? tg.platform : null,
-    tgInitData: tg && tg.initData ? tg.initData : null,  // control validates this (HMAC)
-    egressIp: egressIp, egressCountry: egressCountry,
-    webrtcLeak, blockedReach, tzMismatch, signals,
-  };
-  try {
-    const r = await fetch('/api/report', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(payload) });
-    const j = await r.json().catch(() => ({}));
-    rows($('rep'), [['endpoint','/api/report (same-origin)'],['status', r.ok ? (j.ok ? 'delivered' : 'accepted') : `http ${r.status}`, r.ok ? 'fine' : 'warn']]);
-  } catch (e) {
-    rows($('rep'), [['endpoint','/api/report (same-origin)'],['status','no reporter on this host (static fallback)', 'warn']]);
-  }
+async function report() {
+  const payload = { ts:Date.now(), context: inTelegram?'telegram-webview':'browser', tgInitData: tg&&tg.initData?tg.initData:null,
+    exitIp, exitCountry, realLeak: realLeakIps.length>0, siloState, tzMismatch, blockedReach };
+  try { const r = await fetch('/api/report', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(payload) });
+    const j = await r.json().catch(()=>({})); rows($('rep'), [['/api/report', r.ok?(j.ok?'delivered':'accepted'):`http ${r.status}`, r.ok?'fine':'warn']]);
+  } catch { rows($('rep'), [['/api/report','no reporter on this host (static fallback)','warn']]); }
 }
 
-function paintVerdict(signals) {
+function paintVerdict() {
   const v = $('verdict');
-  const leaked = (egressCountry && egressCountry !== 'RU') || webrtcLeak;
-  v.className = 'verdict ' + (leaked ? 'leak' : 'safe');
-  $('vbig').textContent = leaked ? '⚠ A website here can see your VPN exit' : '✓ Looks like a normal local connection';
-  $('vsub').innerHTML = leaked
-    ? `Exit IP a site learns: <span class="ip">${egressIp || '—'}</span>${egressCountry ? ' ('+egressCountry+')' : ''}. ${inTelegram ? 'This is Telegram’s WebView — it rides your VPN and can’t be siloed.' : 'Use an off-VPN browser for sites that must not see this.'}`
-    : `Sites see <span class="ip">${egressIp || '—'}</span> (${egressCountry || '—'}). No exit leak detected in this context.`;
+  const realLeak = realLeakIps.length > 0;
+  const siloBroken = siloState === 'broken';
+  const bad = realLeak || siloBroken;
+  v.className = 'verdict ' + (bad ? 'leak' : 'safe');
+  $('vbig').textContent = realLeak ? '⚠ Your REAL IP is leaking around the tunnel'
+    : siloBroken ? '⚠ A domain you route "direct" is being tunnelled'
+    : '✓ Clean — no real-IP leak';
+  $('vsub').innerHTML = realLeak ? `A non-exit IP escaped: <span class="ip">${realLeakIps.join(', ')}</span>. That reveals your real location around the VPN — fix WebRTC/DNS/IPv6.`
+    : siloBroken ? `Your "direct" domain returned the exit <span class="ip">${exitIp||'—'}</span> instead of your real IP — RU services on it would see the VPN. Fix the whitelist.`
+    : `Sites see your exit <span class="ip">${exitIp||'—'}</span> (${exitCountry||'—'}) — that's normal and expected. Nothing leaks your real IP.${siloState==='ok'?' Silo check passed.':''}`;
   $('vsum').innerHTML = [
-    [`exit ${egressCountry || '?'}`, egressCountry && egressCountry !== 'RU' ? 'bad' : 'ok'],
-    [`WebRTC ${webrtcLeak ? 'leak' : 'ok'}`, webrtcLeak ? 'bad' : 'ok'],
-    [`blocked ${blockedReach ? 'reachable' : 'blocked'}`, blockedReach ? 'bad' : 'ok'],
-    [`tz ${tzMismatch ? 'mismatch' : 'ok'}`, tzMismatch ? 'bad' : 'ok'],
+    [`exit ${exitCountry||'?'}`, 'info'],
+    [`real-IP ${realLeak?'LEAK':'ok'}`, realLeak?'bad':'ok'],
+    [`silo ${siloState}`, siloState==='broken'?'bad':(siloState==='ok'?'ok':'info')],
   ].map(([t,c]) => `<span class="chip ${c}">${t}</span>`).join('');
 }
 
 async function run() {
   showCtx(); probeFp();
-  egressCountry = egressIp = null; webrtcLeak = blockedReach = tzMismatch = false;
-  $('verdict').className = 'verdict run'; $('vbig').textContent = 'Running checks…'; $('vsub').textContent = ''; $('vsum').innerHTML = '';
+  exitIp = exitCountry = directIp = null; realLeakIps = []; siloState = 'unset'; tzMismatch = blockedReach = false;
+  $('verdict').className = 'verdict'; $('vbig').textContent = 'Running checks…'; $('vsub').textContent=''; $('vsum').innerHTML='';
   await probeEgress();
-  await Promise.all([probeWebRTC(), probeBlocked()]);
-  probeTz(); probeFp();
-  const signals = document.querySelectorAll('#adv .v.tell').length;
-  paintVerdict(signals);
-  report(signals);
+  await Promise.all([probeWebRTC(), probeSilo(), probeBlocked()]);
+  probeTz(); probeFp(); paintVerdict(); report();
 }
 $('run').addEventListener('click', run);
-run();  // auto-run on load
+$('toggle').addEventListener('click', () => {
+  const a = $('adv'); const open = a.classList.toggle('hidden') === false;
+  $('toggle').textContent = open ? 'Advanced ▴' : 'Advanced ▾';
+  $('toggle').setAttribute('aria-expanded', String(open));
+});
+run();
 </script>
 </body>
 </html>
