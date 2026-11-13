@@ -5,7 +5,7 @@ no configuration, nothing stored or logged.
 
 | Path | Answer |
 |---|---|
-| `GET /ip` | `{"ip": "...", "country": "..."}`: the address this hostname saw the request come from |
+| `GET /ip` | `{"ip", "country", "asn", "org"}`: the address (and its network) this hostname saw the request come from |
 | `GET /ping` | `204` (the static-hosting copy answers `200 ok`) |
 
 The same repository deploys two ways:

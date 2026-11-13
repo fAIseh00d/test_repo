@@ -1,6 +1,6 @@
 // Reachability probe: a tiny public API, no pages, no secrets, no configuration.
 //
-//   GET /ip    -> {"ip": "<address this hostname saw>", "country": "<2-letter>"}
+//   GET /ip    -> {"ip", "country", "asn", "org"} as this hostname saw the caller
 //   GET /ping  -> 204
 //
 // The same code runs on several hostnames; the caller compares what each one saw (for example
@@ -16,9 +16,12 @@ export default {
       return headers(new Response(null, { status: 405 }));
     }
     if (url.pathname === "/ip") {
+      const cf = request.cf || {};
       const body = JSON.stringify({
         ip: request.headers.get("cf-connecting-ip"),
-        country: (request.cf && request.cf.country) || null,
+        country: cf.country || null,
+        asn: Number.isFinite(cf.asn) ? cf.asn : null,
+        org: cf.asOrganization || null,
       });
       return headers(new Response(body, { headers: { "content-type": "application/json" } }));
     }
